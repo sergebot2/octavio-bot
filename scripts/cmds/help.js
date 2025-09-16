@@ -28,7 +28,7 @@ module.exports = {
 
     langs: {
         en: {
-            helpHeader: "🤖 VOLDIGO⚡BOT COMMAND SYSTEM",
+            helpHeader: "🤖 ARYAN⚡BOT COMMAND SYSTEM",
             commandNotFound: "⚠️ Command '{command}' not found!",
             doNotHave: "None",
             roleText0: "👥 All Users",
@@ -60,8 +60,8 @@ module.exports = {
         const memberCount = threadInfo.participantIDs ? threadInfo.participantIDs.length : 0;
         
         // Bot information
-        const botOwner = "VOID ZARAKI";
-        const botName = "VOLDIGO⚡BOT";
+        const botOwner = "ARYAN CHAUCHAN";
+        const botName = "ARYAN⚡BOT";
         const botVersion = "4.5";
         const globalPrefix = global.GoatBot.config.prefix;
         
@@ -126,7 +126,7 @@ module.exports = {
             for (const category of sortedCategories) {
                 const commandsInCategory = categories.get(category).sort((a, b) => a.name.localeCompare(b.name));
                 
-                commandList += `📁 ${category} (${commandsInCategory.length} commands):\n`;
+                commandList += `🍓 ${category} (${commandsInCategory.length} commands):\n`;
                 
                 // Show only first 5 commands per category to avoid message being too long
                 commandsInCategory.slice(0, 5).forEach(cmd => {
