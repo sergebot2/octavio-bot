@@ -1,150 +1,211 @@
-const axios = require("axios");
-const path = require("path");
-const fs = require("fs-extra");
+const axios = require('axios');
+const validUrl = require('valid-url');
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
-const Prefixes = ["ai", "Yau5", "Ai"];
+const API_ENDPOINT = "https://shizuai.vercel.app/chat";
+const CLEAR_ENDPOINT = "https://shizuai.vercel.app/chat/clear";
+const TMP_DIR = path.join(__dirname, 'tmp');
 
-global.chatHistory = {};
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
+
+const downloadFile = async (url, ext) => {
+  const filePath = path.join(TMP_DIR, `${uuidv4()}.${ext}`);
+  const response = await axios.get(url, { responseType: 'arraybuffer' });
+  fs.writeFileSync(filePath, Buffer.from(response.data));
+  return filePath;
+};
+
+const resetConversation = async (api, event, message) => {
+  api.setMessageReaction("♻️", event.messageID, () => {}, true);
+  try {
+    await axios.delete(`${CLEAR_ENDPOINT}/${event.senderID}`);
+    return message.reply(`✅ Conversation reset for UID: ${event.senderID}`);
+  } catch (error) {
+    console.error('❌ Reset Error:', error.message);
+    return message.reply("❌ Reset failed. Try again.");
+  }
+};
+
+const handleAIRequest = async (api, event, userInput, message, isReply = false) => {
+  const userId = event.senderID;
+  let messageContent = userInput;
+  let imageUrl = null;
+
+  api.setMessageReaction("⏳", event.messageID, () => {}, true);
+
+  if (event.messageReply) {
+    const replyData = event.messageReply;
+    if (replyData.senderID !== global.GoatBot?.botID && replyData.body) {
+      const trimmedReply = replyData.body.length > 300
+        ? replyData.body.slice(0, 300) + "..."
+        : replyData.body;
+      messageContent += `\n\n📌 Reply:\n"${trimmedReply}"`;
+    }
+    const attachment = replyData.attachments?.[0];
+    if (attachment?.type === 'photo') imageUrl = attachment.url;
+  }
+
+  const urlMatch = messageContent.match(/(https?:\/\/[^\s]+)/)?.[0];
+  if (urlMatch && validUrl.isWebUri(urlMatch)) {
+    imageUrl = urlMatch;
+    messageContent = messageContent.replace(urlMatch, '').trim();
+  }
+
+  if (!messageContent && !imageUrl) {
+    api.setMessageReaction("❌", event.messageID, () => {}, true);
+    return message.reply("💬 Provide a message or image.");
+  }
+
+  try {
+    const response = await axios.post(
+      API_ENDPOINT,
+      { uid: userId, message: messageContent, image_url: imageUrl },
+      { timeout: 60000 }
+    );
+
+    const {
+      reply: textReply,
+      image_url: genImageUrl,
+      music_data: musicData,
+      video_data: videoData,
+      shotti_data: shotiData,
+      lyrics_data: lyricsData
+    } = response.data;
+
+    let finalReply = textReply || '✅ AI Response:';
+    const attachments = [];
+
+    if (genImageUrl) {
+      try {
+        attachments.push(fs.createReadStream(await downloadFile(genImageUrl, 'jpg')));
+      } catch {
+        finalReply += '\n🖼️ Image download failed.';
+      }
+    }
+
+    if (musicData?.downloadUrl) {
+      try {
+        attachments.push(fs.createReadStream(await downloadFile(musicData.downloadUrl, 'mp3')));
+      } catch {
+        finalReply += '\n🎵 Music download failed.';
+      }
+    }
+
+    if (videoData?.downloadUrl) {
+      try {
+        attachments.push(fs.createReadStream(await downloadFile(videoData.downloadUrl, 'mp4')));
+      } catch {
+        finalReply += '\n🎬 Video download failed.';
+      }
+    }
+
+    if (shotiData?.videoUrl) {
+      try {
+        attachments.push(fs.createReadStream(await downloadFile(shotiData.videoUrl, 'mp4')));
+      } catch {
+        finalReply += '\n🎬 Shoti video download failed.';
+      }
+    }
+
+    if (lyricsData) {
+      try {
+        const maxLength = 1500;
+        let lyricsText = lyricsData.lyrics;
+        if (lyricsText.length > maxLength) {
+          lyricsText = lyricsText.substring(0, maxLength) + '... [truncated]';
+        }
+        finalReply += `\n\n🎵 Lyrics for "${lyricsData.track_name}":\n${lyricsText}`;
+      } catch {
+        finalReply += '\n📝 Lyrics processing failed.';
+      }
+    }
+
+    const sentMessage = await message.reply({
+      body: finalReply,
+      attachment: attachments.length > 0 ? attachments : undefined
+    });
+
+    if (sentMessage && sentMessage.messageID) {
+      global.GoatBot.onReply.set(sentMessage.messageID, {
+        commandName: 'ai',
+        messageID: sentMessage.messageID,
+        author: userId
+      });
+    }
+
+    api.setMessageReaction("✅", event.messageID, () => {}, true);
+
+  } catch (error) {
+    console.error("❌ API Error:", error.response?.data || error.message);
+    api.setMessageReaction("❌", event.messageID, () => {}, true);
+
+    let errorMessage = "⚠️ AI Error:\n\n";
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      errorMessage += "⏱️ Timeout. Try again.";
+    } else if (error.response?.status === 429) {
+      errorMessage += "🚦 Too many requests. Slow down.";
+    } else {
+      errorMessage += "❌ Unexpected error: " + (error.message || 'No details');
+    }
+
+    return message.reply(errorMessage);
+  }
+};
 
 module.exports = {
   config: {
-    name: "ai",
-    version: "2.2.4",
-    author: "Hassan", // do not change
+    name: 'ai',
+    aliases: [],
+    version: '2.0.0',
+    author: 'Aryan Chauhan',
     role: 0,
-    category: "ai",
-    shortDescription: {
-      en: "Asks AI for an answer.",
-    },
+    category: 'ai',
     longDescription: {
-      en: "Asks AI for an answer based on the user prompt.",
+      en: 'Advanced AI with image gen, music/video, lyrics, and Shoti'
     },
     guide: {
-      en: `{pn} [prompt]
-
-Example usage:
-1. To ask the AI a question:
-   - {pn} What is the meaning of life?
-
-2. To fetch images:
-   - {pn} etc, images image of 
-   - {pn} AI send me images of nature.
-
-3. To fetch waifu images:
-   - {pn} waifu maid
-   - {pn} waifu raiden-shogun
-
-Available versatile waifu tags:
-maid, waifu, marin-kitagawa, mori-calliope, raiden-shogun, oppai, selfies, uniform, kamisato-ayaka
-
-Available NSFW waifu tags:
-ass, hentai, milf, oral, paizuri, ecchi, ero`
-    },
-  },
-  onStart: async function ({ message, api, event, args }) {
-    // Initialization logic if needed
-  },
-  onChat: async function ({ api, event, args, message }) {
-    try {
-      const prefix = Prefixes.find(
-        (p) => event.body && event.body.toLowerCase().startsWith(p)
-      );
-
-      if (!prefix) {
-        return;
-      }
-
-      let prompt = event.body.substring(prefix.length).trim();
-
-      if (!global.chatHistory[event.senderID]) {
-        global.chatHistory[event.senderID] = [];
-      }
-
-
-      if (event.type === "message_reply" && global.chatHistory[event.senderID].length > 0) {
-        const lastPrompt = global.chatHistory[event.senderID].slice(-1)[0];
-        prompt = lastPrompt + " " + prompt;
-      }
- global.chatHistory[event.senderID].push(prompt);
-
-      let numberImages = 6; // Default to 6 images
-      const match = prompt.match(/-(\d+)$/);
-
-      if (match) {
-        numberImages = Math.min(parseInt(match[1], 10), 8); // Max 8 images
-        prompt = prompt.replace(/-\d+$/, "").trim(); // Remove the number part from prompt
-      }
-
-      if (prompt === "") {
-        await api.sendMessage(
-          "Please provide a question for me to respond to.",
-          event.threadID
-        );
-        return;
-      }
-
-      api.setMessageReaction("âŒ›", event.messageID, () => {}, true);
-
-      const response = await axios.get(
-        `https://over-ai-yau-5001-center-hassan.vercel.app/ai?prompt=${encodeURIComponent(prompt)}`
-      );
-
-      if (response.status !== 200 || !response.data || !response.data.response) {
-        throw new Error("Unable to respond. API error or no data returned.");
-      }
-
-      const messageText = response.data.response;
-
-      const urls = messageText.match(/https?:\/\/\S+\.(jpg|jpeg|png|gif)/gi);
-
-      if (urls && urls.length > 0) {
-        const imgData = [];
-        const limitedUrls = urls.slice(0, numberImages);
-
-        for (let i = 0; i < limitedUrls.length; i++) {
-          try {
-            const imgResponse = await axios.get(limitedUrls[i], {
-              responseType: "arraybuffer",
-            });
-            const imgPath = path.join(__dirname, "cache", `image_${i + 1}.jpg`);
-            await fs.outputFile(imgPath, imgResponse.data);
-            imgData.push(fs.createReadStream(imgPath));
-          } catch (imgError) {
-            console.error("Error fetching image:", imgError);
-            await api.sendMessage(
-              `Failed to load image from ${limitedUrls[i]}.`,
-              event.threadID
-            );
-          }
-        }
-
-        if (imgData.length > 0) {
-          await api.sendMessage(
-            {
-              body: `HERE IS YOUR RESULTSâœ…`,
-              attachment: imgData,
-            },
-            event.threadID,
-            event.messageID
-          );
-          await fs.remove(path.join(__dirname, "cache"));
-        } else {
-          await api.sendMessage("No images were fetched successfully.", event.threadID);
-        }
-      } else {
-        await message.reply(messageText);
-      }
-
-      api.setMessageReaction("âœ…", event.messageID, () => {}, true);
-    } catch (error) {
-      console.error("Error in onChat:", error);
-      await api.sendMessage(
-        `Failed to get answer: ${error.message}`,
-        event.threadID
-      );
+      en: `.ai [your message]  
+• 🤖 Chat, 🎨 Image, 🎵 Music, 🎬 Video  
+• 🎵 Lyrics: "lyrics [song name]"  
+• 🎬 Shoti: "shoti" for random TikTok  
+• 🔄 Reply "clear" to reset conversation  
+• 💬 Works in chat: "ai [message]"`
     }
   },
-  onReply: async function ({ api, message, event, args }) {
-    return this.onChat({ api, message, event, args });
+
+  onStart: async function ({ api, event, args, message }) {
+    const userInput = args.join(' ').trim();
+    if (!userInput) return message.reply("❗ Please enter a message.");
+    
+    if (['clear', 'reset'].includes(userInput.toLowerCase())) {
+      return await resetConversation(api, event, message);
+    }
+    
+    return await handleAIRequest(api, event, userInput, message);
   },
+
+  onReply: async function ({ api, event, Reply, message }) {
+    if (event.senderID !== Reply.author) return;
+    
+    const userInput = event.body?.trim();
+    if (!userInput) return;
+    
+    if (['clear', 'reset'].includes(userInput.toLowerCase())) {
+      return await resetConversation(api, event, message);
+    }
+    
+    return await handleAIRequest(api, event, userInput, message, true);
+  },
+
+  onChat: async function ({ api, event, message }) {
+    const body = event.body?.trim();
+    if (!body?.toLowerCase().startsWith('ai ')) return;
+    
+    const userInput = body.slice(3).trim();
+    if (!userInput) return;
+    
+    return await handleAIRequest(api, event, userInput, message);
+  }
 };
